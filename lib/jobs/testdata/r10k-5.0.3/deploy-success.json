@@ -1,0 +1,49 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Deploying environment",
+    "Environment production is now at <SHA>",
+    "Deploying module to"
+  ],
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "Real r10k deploy of a local file:// control repo (branch production, one Git module) run as deploy. Code Manager coexistence was not run (D-10).",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "deploy-success",
+  "stderr": "INFO\t -> Deploying environment /srv/work/r10k/environments/production\nINFO\t -> Environment production is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k/environments/production/Puppetfile'\nINFO\t -> Deploying module to /srv/work/r10k/environments/production/modules/m\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3"
+}
