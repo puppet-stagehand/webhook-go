@@ -170,6 +170,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("server.tls.allowed_certnames[%d] is empty", i)
 		}
 	}
+	if c.Server.TLS.Certificate == "" || c.Server.TLS.Key == "" {
+		return fmt.Errorf("server.tls.certificate and server.tls.key are required when server.tls.client_ca is set")
+	}
 	if !filepath.IsAbs(c.Deploys.Basedir) {
 		return fmt.Errorf("deploys.basedir must be an absolute path, got %q", c.Deploys.Basedir)
 	}
