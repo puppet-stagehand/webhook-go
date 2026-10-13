@@ -1,8 +1,11 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -21,6 +24,12 @@ type Config struct {
 			Enabled     bool   `mapstructure:"enabled"`
 			Certificate string `mapstructure:"certificate"`
 			Key         string `mapstructure:"key"`
+			// Stagehand: mTLS deploys. Setting ClientCA switches the server to
+			// mTLS-only mode (server/tls.go): every connection must present a
+			// certificate that chains to this CA and whose Subject CN is listed
+			// in AllowedCertnames.
+			ClientCA         string   `mapstructure:"client_ca"`
+			AllowedCertnames []string `mapstructure:"allowed_certnames"`
 		} `mapstructure:"tls"`
 		Queue struct {
 			Enabled           bool `mapstructure:"enabled"`
@@ -51,6 +60,13 @@ type Config struct {
 		IgnoreBranchPrefixes    []string `mapstructure:"ignore_branch_prefixes"`
 		UseG10kCommands         bool     `mapstructure:"use_g10k_commands"`
 	} `mapstructure:"r10k"`
+	// Stagehand: the /api/v1/deploys API (api/deploys.go, lib/jobs).
+	Deploys struct {
+		Basedir     string        `mapstructure:"basedir"`
+		StateDir    string        `mapstructure:"state_dir"`
+		Timeout     time.Duration `mapstructure:"timeout"`
+		OutputLimit int           `mapstructure:"output_limit"`
+	} `mapstructure:"deploys"`
 	// A list of repositoriries names and their corresponding prefix
 	// e.g.: my-puppet-repo: puppet_repo
 	// The key is the repository name, and the value is the prefix to use
@@ -84,6 +100,11 @@ func Init(path *string) {
 	if err != nil {
 		log.Fatalf("Unable to read config file: %v", err)
 	}
+
+	// Stagehand: refuse to start on an unsafe mTLS configuration.
+	if err = config.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 }
 
 // Provides defualt values in case of config file doesn't define some fields
@@ -108,6 +129,13 @@ func setDefaults(v *viper.Viper) *viper.Viper {
 	v.SetDefault("r10k.blocked_branches", []string{})
 	v.SetDefault("r10k.ignore_branch_prefixes", []string{})
 	v.SetDefault("mappings", map[string]string{})
+	// Stagehand: mTLS deploys.
+	v.SetDefault("server.tls.client_ca", "")
+	v.SetDefault("server.tls.allowed_certnames", []string{})
+	v.SetDefault("deploys.basedir", "/etc/puppetlabs/code/environments")
+	v.SetDefault("deploys.state_dir", "/var/lib/webhook-go")
+	v.SetDefault("deploys.timeout", "15m")
+	v.SetDefault("deploys.output_limit", 262144)
 
 	return v
 }
@@ -119,6 +147,39 @@ func relativePath(basedir string, path *string) {
 	if len(p) > 0 && p[0] != '/' {
 		*path = filepath.Join(basedir, p)
 	}
+}
+
+// MTLSEnabled reports whether the server runs in Stagehand mTLS-only mode,
+// which is switched on by setting server.tls.client_ca.
+func (c Config) MTLSEnabled() bool {
+	return c.Server.TLS.ClientCA != ""
+}
+
+// Validate refuses configurations that would run the mTLS deploy server
+// without its protections. It checks nothing when mTLS is off, so upstream
+// behaviour is unchanged.
+func (c Config) Validate() error {
+	if !c.MTLSEnabled() {
+		return nil
+	}
+	if len(c.Server.TLS.AllowedCertnames) == 0 {
+		return fmt.Errorf("server.tls.allowed_certnames must list at least one certname when server.tls.client_ca is set")
+	}
+	for i, name := range c.Server.TLS.AllowedCertnames {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("server.tls.allowed_certnames[%d] is empty", i)
+		}
+	}
+	if !filepath.IsAbs(c.Deploys.Basedir) {
+		return fmt.Errorf("deploys.basedir must be an absolute path, got %q", c.Deploys.Basedir)
+	}
+	if c.Deploys.Timeout <= 0 {
+		return fmt.Errorf("deploys.timeout must be greater than zero")
+	}
+	if c.Deploys.OutputLimit <= 0 {
+		return fmt.Errorf("deploys.output_limit must be greater than zero")
+	}
+	return nil
 }
 
 // This function simply returns the currently loaded configuration
