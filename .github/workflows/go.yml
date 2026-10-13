@@ -2,9 +2,10 @@ name: Go
 
 on:
   push:
-    branches: [ master ]
+    # Stagehand fork: also run on the stagehand branch (FK-01).
+    branches: [ master, stagehand ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, stagehand ]
 
 jobs:
 
