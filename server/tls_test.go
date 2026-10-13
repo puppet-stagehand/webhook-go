@@ -8,9 +8,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,4 +226,105 @@ func TestNewMTLSServerRejectsEmptyCAFile(t *testing.T) {
 	if _, err := newMTLSServer(f.conf, NewRouter()); err == nil || !strings.Contains(err.Error(), "server.tls.client_ca") {
 		t.Fatalf("err = %v, want one naming server.tls.client_ca", err)
 	}
+}
+
+// freePort returns a loopback port nothing is listening on.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return port
+}
+
+// assertNotListening proves a refused start never opened its listener.
+func assertNotListening(t *testing.T, port int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("port %d is in use after a refused start: %v", port, err)
+	}
+	ln.Close()
+}
+
+func TestStartRefusesClientCAWithoutAllowList(t *testing.T) {
+	for name, allowed := range map[string][]string{"empty list": nil, "blank entry": {" "}} {
+		t.Run(name, func(t *testing.T) {
+			f := newMTLSFixture(t, allowed...)
+			f.conf.Server.Port = freePort(t)
+			srv, err := newMTLSServer(f.conf, NewRouter())
+			if err == nil || srv != nil || !strings.Contains(err.Error(), "server.tls.allowed_certnames") {
+				t.Fatalf("newMTLSServer = %v, %v; want an error naming server.tls.allowed_certnames", srv, err)
+			}
+			assertNotListening(t, f.conf.Server.Port)
+		})
+	}
+}
+
+func TestStartRefusesClientCAWithoutServerCert(t *testing.T) {
+	for name, clear := range map[string]func(*config.Config){
+		"no certificate": func(c *config.Config) { c.Server.TLS.Certificate = "" },
+		"no key":         func(c *config.Config) { c.Server.TLS.Key = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMTLSFixture(t, "stagehand-code-manager")
+			f.conf.Server.Port = freePort(t)
+			clear(&f.conf)
+			srv, err := newMTLSServer(f.conf, NewRouter())
+			if err == nil || srv != nil ||
+				!strings.Contains(err.Error(), "server.tls.certificate and server.tls.key are required when server.tls.client_ca is set") {
+				t.Fatalf("newMTLSServer = %v, %v; want the missing server certificate named", srv, err)
+			}
+			assertNotListening(t, f.conf.Server.Port)
+		})
+	}
+}
+
+func TestLegacyRoutesAbsentInMTLSMode(t *testing.T) {
+	payload := func(t *testing.T) *os.File {
+		p, err := os.Open("../lib/parsers/json/github/push_not_deleted.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { p.Close() })
+		return p
+	}
+
+	t.Run("mTLS on", func(t *testing.T) {
+		f := newMTLSFixture(t, "stagehand-code-manager")
+		loadMTLSConfig(t, f, "")
+		url := f.serve(t, NewRouter())
+		req, _ := http.NewRequest(http.MethodPost, url+"/api/v1/r10k/environment", payload(t))
+		req.Header.Set("X-GitHub-Event", "push")
+		resp, err := f.client(t, clientCert(t, f.ca, "stagehand-code-manager")).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("legacy route status = %d in mTLS mode, want 404", resp.StatusCode)
+		}
+	})
+
+	t.Run("mTLS off", func(t *testing.T) {
+		cfg := "../lib/helpers/yaml/webhook.queue.yaml"
+		config.Init(&cfg)
+		router := NewRouter()
+		// No provider header: upstream's handler is reached and rejects the
+		// body, so no engine runs, but the route exists (not 404).
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/r10k/environment", payload(t))
+		router.ServeHTTP(w, req)
+		if w.Code == http.StatusNotFound {
+			t.Fatalf("legacy route answered 404 with mTLS off; upstream routing must be unchanged")
+		}
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/deploys", nil))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("deploy API answered %d with mTLS off, want 404", w.Code)
+		}
+	})
 }
