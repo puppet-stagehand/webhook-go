@@ -21,3 +21,39 @@ r10k:
   verbose: true
   generate_types: false
 mappings: []
+
+# --- Stagehand mTLS deploys (puppet-stagehand fork) ---------------------------
+# Uncomment to switch this server to mTLS-only mode. Setting client_ca turns it
+# on; the server then refuses to start unless allowed_certnames lists at least
+# one certname and tls.certificate and tls.key are set (tls.enabled is not
+# consulted in this mode). In mTLS mode the git-provider webhook routes
+# (/api/v1/r10k/*) are not served; POST /api/v1/deploys is the only way to
+# deploy, and GET /api/v1/deploys/<id> and GET /api/v1/deploys?limit=N read
+# the results back. This file is installed as config|noreplace, so upgrades
+# never overwrite your edits.
+#
+# server:
+#   tls:
+#     # The Puppet CA bundle client certificates must chain to. Default: "" (mTLS off).
+#     client_ca: /etc/puppetlabs/puppet/ssl/certs/ca.pem
+#     # Certnames (certificate Subject CN) allowed to call the API. Default: [] (required with client_ca).
+#     # Never autosign a certname listed here.
+#     allowed_certnames:
+#       - stagehand-code-manager
+#     # The server's own certificate and key; use this host's Puppet certificate.
+#     certificate: /etc/puppetlabs/puppet/ssl/certs/<this host's certname>.pem
+#     key: /etc/puppetlabs/puppet/ssl/private_keys/<this host's certname>.pem
+#
+# deploys:
+#   # Where environments live; each environment's deploy marker is read from here.
+#   basedir: /etc/puppetlabs/code/environments
+#   # Where deploy state is kept (job records and the deploy lock, added in a later release).
+#   state_dir: /var/lib/webhook-go
+#   # How long one environment's r10k or g10k run may take before it is stopped.
+#   timeout: 15m
+#   # Bytes of engine output kept per environment (the end of the output is kept).
+#   output_limit: 262144
+#
+# On Puppet Core, r10k installed with puppet_gem lives at
+# /opt/puppetlabs/puppet/bin/r10k, not the built-in PE default
+# /opt/puppetlabs/puppetserver/bin/r10k; set r10k.command_path to match.
