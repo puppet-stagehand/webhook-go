@@ -1,0 +1,58 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/g10k.yaml",
+    "-info",
+    "-branch",
+    "production"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Need to sync",
+    "Synced"
+  ],
+  "extra": {
+    "deploy_success": true,
+    "signature_is_remote_head": true
+  },
+  "files_changed": [
+    ".g10k-deploy.json",
+    "Puppetfile",
+    "environment.conf",
+    "manifests/site.pp",
+    "modules/m/.latest_commit",
+    "modules/m/manifests/init.pp",
+    "modules/m/metadata.json"
+  ],
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "git_dir",
+    "git_url",
+    "name",
+    "puppetfile_checksum",
+    "signature",
+    "started_at"
+  ],
+  "notes": "Real g10k deploy of production from a local file:// control repo, run as deploy; the baseline the dry-run fixtures are measured against.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "deploy-success",
+  "stderr": "",
+  "stdout": "Need to sync /srv/work/g10k/environments/production\nNeed to sync /srv/work/g10k/environments/production/modules/m\nSynced /srv/work/g10k/g10k.yaml with branch production with 2 git repositories and 0 Forge modules in <DUR> with git (<DUR> sync, I/O <DUR>) and Forge (<DUR> query+download, I/O <DUR>) using 50 resolve and 20 extract workers\n",
+  "tool": "g10k",
+  "tool_version": "0.10.0",
+  "tree_hash_after": "6bfadc7e27dcdc05",
+  "tree_hash_excl_markers_after": "b59cf6bab3515e87"
+}
