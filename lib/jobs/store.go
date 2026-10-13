@@ -29,9 +29,12 @@ const InterruptedReason = "interrupted by a restart"
 // FileStore keeps one JSON file per job in <state_dir>/jobs/<id>.json, so
 // records survive a restart (D-12). Files are 0600 and the directory 0700:
 // they hold repository URLs and engine output. Every write goes to a
-// temporary file that is renamed over the record, so a crash never leaves a
-// half-written record. Once a job finishes, the store deletes the oldest
-// finished records beyond maxJobs.
+// temporary file that is renamed over the record, so a crashed process never
+// leaves a half-written record. A finished job's record is also synced to disk
+// before the rename, so its verdict survives a power loss; progress writes
+// (queued, deploying) are not, which keeps a wait:false answer immediate, and
+// Reconcile fails such jobs after any restart anyway. Once a job finishes, the
+// store deletes the oldest finished records beyond maxJobs.
 //
 // Each store is an instance with a random id, and holds an flock on
 // <state_dir>/instances/<id>.lock while it is open. Records name the instance
@@ -207,15 +210,15 @@ func (s *FileStore) writeLocked(job Job) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(s.dir, job.ID+".json", b); err != nil {
+	if err := writeFileAtomic(s.dir, job.ID+".json", b, job.State.Terminal()); err != nil {
 		return fmt.Errorf("jobs: saving %s: %w", job.ID, err)
 	}
 	return nil
 }
 
 // writeFileAtomic writes b to dir/name with mode 0600 through a temporary
-// file in the same directory and a rename.
-func writeFileAtomic(dir, name string, b []byte) error {
+// file in the same directory and a rename; durable syncs the data first.
+func writeFileAtomic(dir, name string, b []byte, durable bool) error {
 	tmp, err := os.CreateTemp(dir, "."+name+".tmp-*") // CreateTemp uses mode 0600
 	if err != nil {
 		return err
@@ -234,8 +237,10 @@ func writeFileAtomic(dir, name string, b []byte) error {
 	if err := tmp.Chmod(0o600); err != nil {
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
-		return err
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			return err
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		return err
