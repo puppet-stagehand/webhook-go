@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+
 	log "github.com/sirupsen/logrus"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +15,15 @@ import (
 // It includes logging, recovery middleware, health checks, and API routes for version 1.
 // If server protection is enabled, it adds BasicAuth middleware for the API.
 func NewRouter() *gin.Engine {
+	router, _ := newRouter(context.Background())
+	return router
+}
+
+// newRouter is NewRouter with the server's base context for the Stagehand
+// deploy runner. It also returns the deploys controller (nil with mTLS off)
+// so the server can drain it on shutdown.
+func newRouter(ctx context.Context) (*gin.Engine, *wapi.DeploysController) {
+	var deploys *wapi.DeploysController
 	router := gin.New()        // Create a new Gin router.
 	router.Use(gin.Logger())   // Add logging middleware.
 	router.Use(gin.Recovery()) // Add recovery middleware to handle panics.
@@ -41,7 +52,8 @@ func NewRouter() *gin.Engine {
 			// registered, and /api/v1/deploys is the only way to deploy. With
 			// mTLS off, upstream routing is unchanged and the deploy API is absent.
 			if conf := config.GetConfig(); conf.MTLSEnabled() {
-				deploys, err := wapi.NewDeploysController(conf)
+				var err error
+				deploys, err = wapi.NewDeploysController(ctx, conf)
 				if err != nil {
 					log.Fatalf("deploy API: %v", err)
 				}
@@ -64,5 +76,5 @@ func NewRouter() *gin.Engine {
 		}
 	}
 
-	return router
+	return router, deploys
 }

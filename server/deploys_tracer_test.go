@@ -56,7 +56,9 @@ type tracer struct {
 
 // loadMTLSConfig writes the fixture's mTLS settings plus extra YAML to a file
 // and loads it through config.Init, exactly as the server does at start.
-func loadMTLSConfig(t *testing.T, f *mtlsFixture, extra string) {
+// deploys holds extra keys for the deploys section, each indented two spaces;
+// the section always names the fixture's state_dir.
+func loadMTLSConfig(t *testing.T, f *mtlsFixture, extra, deploys string) {
 	t.Helper()
 	allowed, _ := json.Marshal(f.conf.Server.TLS.AllowedCertnames)
 	y := fmt.Sprintf(`server:
@@ -67,7 +69,10 @@ func loadMTLSConfig(t *testing.T, f *mtlsFixture, extra string) {
     key: %q
     client_ca: %q
     allowed_certnames: %s
-%s`, f.conf.Server.TLS.Certificate, f.conf.Server.TLS.Key, f.conf.Server.TLS.ClientCA, allowed, extra)
+deploys:
+  state_dir: %q
+%s%s`, f.conf.Server.TLS.Certificate, f.conf.Server.TLS.Key, f.conf.Server.TLS.ClientCA, allowed,
+		f.conf.Deploys.StateDir, deploys, extra)
 	p := writeFile(t, f.dir, "webhook.yml", []byte(y))
 	config.Init(&p)
 	t.Cleanup(func() {
@@ -92,10 +97,9 @@ func newTracer(t *testing.T) *tracer {
   config_path: /etc/puppetlabs/r10k/r10k.yaml
   verbose: false
   generate_types: false
-deploys:
-  basedir: %q
+`, exe), fmt.Sprintf(`  basedir: %q
   timeout: 1m
-`, exe, basedir))
+`, basedir))
 
 	t.Setenv(fakeengine.FixtureEnv, fixture)
 	t.Setenv(fakeengine.BasedirEnv, basedir)

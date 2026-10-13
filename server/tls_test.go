@@ -119,8 +119,10 @@ func newMTLSFixture(t *testing.T, allowed ...string) *mtlsFixture {
 	c.Server.TLS.ClientCA = writeFile(t, dir, "ca.pem", ca.pem)
 	c.Server.TLS.AllowedCertnames = allowed
 	c.Deploys.Basedir = "/etc/puppetlabs/code/environments"
+	c.Deploys.StateDir = t.TempDir()
 	c.Deploys.Timeout = time.Minute
 	c.Deploys.OutputLimit = 262144
+	c.Deploys.MaxJobs = 500
 	return &mtlsFixture{ca: ca, dir: dir, conf: c}
 }
 
@@ -296,7 +298,7 @@ func TestLegacyRoutesAbsentInMTLSMode(t *testing.T) {
 
 	t.Run("mTLS on", func(t *testing.T) {
 		f := newMTLSFixture(t, "stagehand-code-manager")
-		loadMTLSConfig(t, f, "")
+		loadMTLSConfig(t, f, "", "")
 		url := f.serve(t, NewRouter())
 		req, _ := http.NewRequest(http.MethodPost, url+"/api/v1/r10k/environment", payload(t))
 		req.Header.Set("X-GitHub-Event", "push")

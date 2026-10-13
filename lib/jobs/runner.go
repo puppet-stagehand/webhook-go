@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -32,11 +31,28 @@ func R10kEngine(argv func(env string) []string) Engine {
 	return Engine{Name: "r10k", MarkerFile: ".r10k-deploy.json", Argv: argv}
 }
 
-// G10kEngine drives g10k; argv is normally the upstream g10k command helper.
-// Its fixture-driven tests arrive with plan 57.6-06.
+// G10kEngine drives g10k; argv is normally the upstream g10k command helper
+// ([command_path, -config=<cfg>, -branch=<env>, (-verbose)]). g10k is judged
+// by its own marker, .g10k-deploy.json, by the same rule as r10k (D-29).
 func G10kEngine(argv func(env string) []string) Engine {
 	return Engine{Name: "g10k", MarkerFile: ".g10k-deploy.json", Argv: argv}
 }
+
+// DefaultMaxJobs is how many job records a FileStore keeps by default
+// (deploys.max_jobs).
+const DefaultMaxJobs = 500
+
+// ErrInvalidRequest wraps every reason NewJob refuses a request.
+var ErrInvalidRequest = errors.New("invalid deploy request")
+
+// MaxPending bounds the jobs one runner holds at once, queued or running.
+const MaxPending = 100
+
+// ErrBusy is returned by Start when MaxPending jobs are already pending.
+var ErrBusy = errors.New("too many deploys pending")
+
+// ErrShutdown is returned by Start once the runner is shutting down.
+var ErrShutdown = errors.New("the deploy service is shutting down")
 
 // Options configure a Runner.
 type Options struct {
@@ -45,6 +61,10 @@ type Options struct {
 	Timeout     time.Duration // per engine invocation
 	OutputLimit int           // bytes of combined output kept per environment
 	Store       Store
+	// Context is the runner's base context, normally the server's: when it
+	// is cancelled, running engines are stopped and queued jobs fail. Nil
+	// means context.Background().
+	Context context.Context
 }
 
 // Runner runs deploy jobs one at a time.
@@ -53,6 +73,14 @@ type Runner struct {
 	// mu serialises jobs inside this process so two requests never run the
 	// engine at once. The cross-process flock arrives with plan 57.6-06.
 	mu sync.Mutex
+
+	ctx    context.Context // base context for every job
+	cancel context.CancelFunc
+	wg     sync.WaitGroup // background jobs
+
+	pendMu  sync.Mutex
+	pending int
+	closed  bool
 }
 
 // NewRunner checks opts and returns a Runner.
@@ -69,7 +97,81 @@ func NewRunner(opts Options) (*Runner, error) {
 	case opts.Store == nil:
 		return nil, errors.New("jobs: store is not configured")
 	}
-	return &Runner{opts: opts}, nil
+	base := opts.Context
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
+	return &Runner{opts: opts, ctx: ctx, cancel: cancel}, nil
+}
+
+// reserve counts one more pending job, or refuses it.
+func (r *Runner) reserve() error {
+	r.pendMu.Lock()
+	defer r.pendMu.Unlock()
+	switch {
+	case r.closed || r.ctx.Err() != nil:
+		return ErrShutdown
+	case r.pending >= MaxPending:
+		return ErrBusy
+	}
+	r.pending++
+	return nil
+}
+
+func (r *Runner) release() {
+	r.pendMu.Lock()
+	r.pending--
+	r.pendMu.Unlock()
+}
+
+// Start runs job in the background on the runner's base context and returns
+// at once (MH-01). Its progress is read back from the store.
+func (r *Runner) Start(job Job) error {
+	if err := r.reserve(); err != nil {
+		return err
+	}
+	// The goroutine owns its own copy: the caller still encodes job (the
+	// 202 answer) while the runner rewrites its results.
+	job = job.clone()
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		defer r.release()
+		if _, err := r.Run(r.ctx, job); err != nil {
+			log.Errorf("deploy %s: %v", job.ID, err)
+		}
+	}()
+	return nil
+}
+
+// RunSync runs job on the runner's base context and waits for it. It is not
+// tied to any request: a client that hangs up must not stop an engine half way
+// through an environment. deploys.timeout still bounds every invocation.
+func (r *Runner) RunSync(job Job) (Job, error) {
+	if err := r.reserve(); err != nil {
+		return job, err
+	}
+	defer r.release()
+	return r.Run(r.ctx, job)
+}
+
+// Shutdown stops accepting jobs, cancels the base context (stopping any
+// running engine and failing queued jobs) and waits up to timeout for
+// background jobs to record their outcome.
+func (r *Runner) Shutdown(timeout time.Duration) error {
+	r.pendMu.Lock()
+	r.closed = true
+	r.pendMu.Unlock()
+	r.cancel()
+	done := make(chan struct{})
+	go func() { r.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("jobs: background deploys still running after %s", timeout)
+	}
 }
 
 // Store returns the runner's job store.
@@ -81,24 +183,24 @@ func (r *Runner) Engine() string { return r.opts.Engine.Name }
 // NewJob validates envs, records a queued job and returns it.
 func (r *Runner) NewJob(envs []EnvRequest) (Job, error) {
 	if len(envs) == 0 || len(envs) > MaxEnvironments {
-		return Job{}, fmt.Errorf("a deploy names 1 to %d environments, got %d", MaxEnvironments, len(envs))
+		return Job{}, fmt.Errorf("%w: a deploy names 1 to %d environments, got %d", ErrInvalidRequest, MaxEnvironments, len(envs))
 	}
 	seen := map[string]bool{}
 	job := Job{
-		ID:        uuid.NewString(),
+		ID:        newJobID(),
 		Engine:    r.opts.Engine.Name,
 		State:     StateQueued,
 		CreatedAt: time.Now().UTC(),
 	}
 	for _, e := range envs {
 		if !ValidEnvironmentName(e.Name) {
-			return Job{}, fmt.Errorf("invalid environment name %q", e.Name)
+			return Job{}, fmt.Errorf("%w: invalid environment name %q", ErrInvalidRequest, e.Name)
 		}
 		if !ValidSHA(e.ExpectedSHA) {
-			return Job{}, fmt.Errorf("invalid expected_sha for %s", e.Name)
+			return Job{}, fmt.Errorf("%w: invalid expected_sha for %s", ErrInvalidRequest, e.Name)
 		}
 		if seen[e.Name] {
-			return Job{}, fmt.Errorf("environment %s named twice", e.Name)
+			return Job{}, fmt.Errorf("%w: environment %s named twice", ErrInvalidRequest, e.Name)
 		}
 		seen[e.Name] = true
 		job.Results = append(job.Results, EnvResult{Environment: e.Name, State: StateQueued, ExpectedSHA: e.ExpectedSHA})
@@ -107,6 +209,19 @@ func (r *Runner) NewJob(envs []EnvRequest) (Job, error) {
 		return Job{}, err
 	}
 	return job, nil
+}
+
+// FailUnstarted marks every unfinished environment of job, and the job, failed
+// with reason. Nothing ran, so exit codes are -1.
+func FailUnstarted(job Job, reason string) Job {
+	now := time.Now().UTC()
+	for i := range job.Results {
+		if !job.Results[i].State.Terminal() {
+			job.Results[i].State, job.Results[i].ExitCode, job.Results[i].Error = StateFailed, -1, reason
+		}
+	}
+	job.State, job.FinishedAt = StateFailed, &now
+	return job
 }
 
 // Run deploys every environment of job in order, one engine invocation each,
@@ -125,6 +240,12 @@ func (r *Runner) Run(ctx context.Context, job Job) (Job, error) {
 
 	all := true
 	for i := range job.Results {
+		if ctx.Err() != nil {
+			// Shutting down: the remaining environments never start.
+			job.Results[i].State, job.Results[i].ExitCode, job.Results[i].Error = StateFailed, -1, "not run: "+ErrShutdown.Error()
+			all = false
+			continue
+		}
 		job.Results[i].State = StateDeploying
 		_ = r.opts.Store.Save(job)
 		job.Results[i] = r.deployOne(ctx, job.Results[i])
@@ -182,8 +303,12 @@ func (r *Runner) deployOne(ctx context.Context, res EnvResult) EnvResult {
 		res.State, res.ExitCode, res.Error = StateFailed, -1, "engine did not start: "+runErr.Error()
 		return res
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
 		res.State, res.Error = StateFailed, fmt.Sprintf("engine timed out after %s", r.opts.Timeout)
+		return res
+	case context.Canceled:
+		res.State, res.Error = StateFailed, "engine stopped: "+ErrShutdown.Error()
 		return res
 	}
 

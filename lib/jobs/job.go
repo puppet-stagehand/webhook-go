@@ -4,6 +4,8 @@
 package jobs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -20,6 +22,18 @@ const (
 	StateDeployed  State = "deployed"
 	StateFailed    State = "failed"
 )
+
+// Terminal reports whether s is final: deployed or failed.
+func (s State) Terminal() bool { return s == StateDeployed || s == StateFailed }
+
+// newJobID returns 128 random bits in lower-case hex.
+func newJobID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("jobs: no randomness for a job id: " + err.Error()) // crypto/rand never fails on supported platforms
+	}
+	return hex.EncodeToString(b[:])
+}
 
 var (
 	// environmentNameRE is the SDK's deploy-time rule for environment names.
@@ -88,8 +102,8 @@ func (j Job) clone() Job {
 // ErrNotFound is returned by a Store for an unknown job id.
 var ErrNotFound = errors.New("deploy not found")
 
-// Store keeps job records. The in-memory store below serves plan 57.6-03; the
-// file-backed store of plan 57.6-06 implements the same interface.
+// Store keeps job records. FileStore (store.go) is what the server uses;
+// MemoryStore below serves tests.
 type Store interface {
 	// Save inserts or replaces a job.
 	Save(job Job) error
@@ -99,7 +113,8 @@ type Store interface {
 	List(limit int) ([]Job, error)
 }
 
-// MemoryStore is a bounded in-memory Store. History is lost on restart.
+// MemoryStore is a bounded in-memory Store for tests. History is lost on
+// restart, so the server uses FileStore.
 type MemoryStore struct {
 	mu    sync.Mutex
 	max   int

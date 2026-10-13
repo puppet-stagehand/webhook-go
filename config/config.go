@@ -66,6 +66,9 @@ type Config struct {
 		StateDir    string        `mapstructure:"state_dir"`
 		Timeout     time.Duration `mapstructure:"timeout"`
 		OutputLimit int           `mapstructure:"output_limit"`
+		// MaxJobs is how many job records are kept under StateDir/jobs; the
+		// oldest finished ones beyond it are deleted.
+		MaxJobs int `mapstructure:"max_jobs"`
 	} `mapstructure:"deploys"`
 	// A list of repositoriries names and their corresponding prefix
 	// e.g.: my-puppet-repo: puppet_repo
@@ -136,6 +139,7 @@ func setDefaults(v *viper.Viper) *viper.Viper {
 	v.SetDefault("deploys.state_dir", "/var/lib/webhook-go")
 	v.SetDefault("deploys.timeout", "15m")
 	v.SetDefault("deploys.output_limit", 262144)
+	v.SetDefault("deploys.max_jobs", 500)
 
 	return v
 }
@@ -181,6 +185,12 @@ func (c Config) Validate() error {
 	}
 	if c.Deploys.OutputLimit <= 0 {
 		return fmt.Errorf("deploys.output_limit must be greater than zero")
+	}
+	if !filepath.IsAbs(c.Deploys.StateDir) {
+		return fmt.Errorf("deploys.state_dir must be an absolute path, got %q", c.Deploys.StateDir)
+	}
+	if c.Deploys.MaxJobs < 1 {
+		return fmt.Errorf("deploys.max_jobs must be at least 1")
 	}
 	return nil
 }
