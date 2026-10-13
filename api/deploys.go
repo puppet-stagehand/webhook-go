@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -44,7 +45,9 @@ type DeploysController struct {
 // the engine and its argv come from upstream's r10k/g10k command helpers, so
 // r10k.command_path, r10k.config_path, r10k.use_g10k_commands and the r10k
 // flags apply unchanged (MH-06). Job records live in a FileStore under
-// deploys.state_dir. ctx is the server's base context: cancelling it stops
+// deploys.state_dir, deploys take <state_dir>/deploy.lock, and records a
+// previous process left unfinished are failed here, once, before any route
+// is registered. ctx is the server's base context: cancelling it stops
 // running engines and fails queued jobs; Shutdown then waits for them.
 func NewDeploysController(ctx context.Context, conf config.Config) (*DeploysController, error) {
 	var h helpers.Helper
@@ -67,12 +70,21 @@ func NewDeploysController(ctx context.Context, conf config.Config) (*DeploysCont
 	if err != nil {
 		return nil, err
 	}
+	// Before any route accepts a request: a job a previous process left
+	// queued or deploying is failed, so no client polls it forever.
+	if n, err := store.Reconcile(); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("reconciling deploy records: %w", err)
+	} else if n > 0 {
+		log.Warnf("deploy API: %d deploy(s) interrupted by a restart marked failed", n)
+	}
 	runner, err := jobs.NewRunner(jobs.Options{
 		Engine:      engine,
 		Basedir:     conf.Deploys.Basedir,
 		Timeout:     conf.Deploys.Timeout,
 		OutputLimit: conf.Deploys.OutputLimit,
 		Store:       store,
+		LockPath:    filepath.Join(conf.Deploys.StateDir, "deploy.lock"),
 		Context:     ctx,
 	})
 	if err != nil {

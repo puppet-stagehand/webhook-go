@@ -64,18 +64,21 @@ type Options struct {
 	Timeout     time.Duration // per engine invocation
 	OutputLimit int           // bytes of combined output kept per environment
 	Store       Store
+	// LockPath is the cross-process deploy lock file, normally
+	// <state_dir>/deploy.lock. Empty locks within this process only (tests).
+	LockPath string
 	// Context is the runner's base context, normally the server's: when it
 	// is cancelled, running engines are stopped and queued jobs fail. Nil
 	// means context.Background().
 	Context context.Context
 }
 
-// Runner runs deploy jobs one at a time.
+// Runner runs deploy jobs one at a time, holding the deploy lock.
 type Runner struct {
 	opts Options
-	// mu serialises jobs inside this process so two requests never run the
-	// engine at once. The cross-process flock arrives with plan 57.6-06.
-	mu sync.Mutex
+	// lock serialises jobs, in this process and across processes sharing the
+	// lock file, so two deploys never run an engine at once (MH-03).
+	lock *DeployLock
 
 	ctx    context.Context // base context for every job
 	cancel context.CancelFunc
@@ -105,7 +108,7 @@ func NewRunner(opts Options) (*Runner, error) {
 		base = context.Background()
 	}
 	ctx, cancel := context.WithCancel(base)
-	return &Runner{opts: opts, ctx: ctx, cancel: cancel}, nil
+	return &Runner{opts: opts, lock: NewDeployLock(opts.LockPath), ctx: ctx, cancel: cancel}, nil
 }
 
 // reserve counts one more pending job, or refuses it.
@@ -231,8 +234,19 @@ func FailUnstarted(job Job, reason string) Job {
 // saving progress to the store as it goes, and returns the finished job. The
 // job is failed unless every environment was deployed.
 func (r *Runner) Run(ctx context.Context, job Job) (Job, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	// The job stays queued while it waits for the lock. The lock is held
+	// around every engine invocation of the job, environments in request
+	// order, one at a time.
+	release, err := r.lock.Acquire(ctx)
+	if err != nil {
+		reason := "not run: " + err.Error()
+		if ctx.Err() != nil {
+			reason = "not run: " + ErrShutdown.Error()
+		}
+		job = FailUnstarted(job, reason)
+		return job, r.opts.Store.Save(job)
+	}
+	defer release()
 
 	started := time.Now().UTC()
 	job.StartedAt = &started

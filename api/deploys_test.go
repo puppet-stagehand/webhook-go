@@ -304,3 +304,37 @@ deploys:
 		t.Fatal(err)
 	}
 }
+
+// Once the service is shutting down a deploy is refused with 503 and its
+// record reads failed, never queued.
+func TestDeployRefusedWhileShuttingDown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	runner, err := jobs.NewRunner(jobs.Options{
+		Engine:      jobs.R10kEngine(func(env string) []string { return []string{"/nonexistent/r10k", env} }),
+		Basedir:     t.TempDir(),
+		Timeout:     time.Minute,
+		OutputLimit: 1024,
+		Store:       jobs.NewMemoryStore(10),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := newDeploysController(runner)
+	r := gin.New()
+	d.Register(r.Group("/api/v1"))
+	if err := d.Shutdown(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, wait := range []string{"true", "false"} {
+		w := post(r, `{"environments":[{"name":"production","expected_sha":"`+goodSHA+`"}],"wait":`+wait+`}`)
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+			t.Fatalf("wait %s: status = %d, body %s", wait, w.Code, w.Body)
+		}
+		var e struct{ ID string }
+		json.Unmarshal(w.Body.Bytes(), &e)
+		job, err := runner.Store().Get(e.ID)
+		if err != nil || job.State != jobs.StateFailed || job.Results[0].Error != jobs.ErrShutdown.Error() {
+			t.Fatalf("wait %s: record = %+v, %v", wait, job, err)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +31,14 @@ type Config struct {
 			// in AllowedCertnames.
 			ClientCA         string   `mapstructure:"client_ca"`
 			AllowedCertnames []string `mapstructure:"allowed_certnames"`
+			// CRL is the Puppet CA's certificate revocation list (PEM). A
+			// client certificate it lists fails the handshake. It is reloaded
+			// when the file changes, checked at most once a minute.
+			CRL string `mapstructure:"crl"`
+			// AllowedFingerprints, when non-empty, pins the client
+			// certificates: the SHA-256 fingerprint of the leaf (colon hex,
+			// as Puppet prints it) must be listed, as well as its certname.
+			AllowedFingerprints []string `mapstructure:"allowed_fingerprints"`
 		} `mapstructure:"tls"`
 		Queue struct {
 			Enabled           bool `mapstructure:"enabled"`
@@ -135,6 +144,8 @@ func setDefaults(v *viper.Viper) *viper.Viper {
 	// Stagehand: mTLS deploys.
 	v.SetDefault("server.tls.client_ca", "")
 	v.SetDefault("server.tls.allowed_certnames", []string{})
+	v.SetDefault("server.tls.crl", "")
+	v.SetDefault("server.tls.allowed_fingerprints", []string{})
 	v.SetDefault("deploys.basedir", "/etc/puppetlabs/code/environments")
 	v.SetDefault("deploys.state_dir", "/var/lib/webhook-go")
 	v.SetDefault("deploys.timeout", "15m")
@@ -174,6 +185,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("server.tls.allowed_certnames[%d] is empty", i)
 		}
 	}
+	for i, fp := range c.Server.TLS.AllowedFingerprints {
+		if _, ok := NormalizeFingerprint(fp); !ok {
+			return fmt.Errorf("server.tls.allowed_fingerprints[%d] must be a SHA-256 fingerprint as 32 colon-separated hex pairs (AB:CD:...), got %q", i, fp)
+		}
+	}
 	if c.Server.TLS.Certificate == "" || c.Server.TLS.Key == "" {
 		return fmt.Errorf("server.tls.certificate and server.tls.key are required when server.tls.client_ca is set")
 	}
@@ -193,6 +209,16 @@ func (c Config) Validate() error {
 		return fmt.Errorf("deploys.max_jobs must be at least 1")
 	}
 	return nil
+}
+
+var fingerprintRE = regexp.MustCompile(`^([0-9A-F]{2}:){31}[0-9A-F]{2}$`)
+
+// NormalizeFingerprint returns a SHA-256 certificate fingerprint in the form
+// Puppet prints it (upper-case hex pairs joined by colons) and whether s is
+// one. Lower-case input is accepted.
+func NormalizeFingerprint(s string) (string, bool) {
+	up := strings.ToUpper(strings.TrimSpace(s))
+	return up, fingerprintRE.MatchString(up)
 }
 
 // This function simply returns the currently loaded configuration

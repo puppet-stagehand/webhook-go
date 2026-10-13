@@ -28,9 +28,11 @@ mappings: []
 # one certname and tls.certificate and tls.key are set (tls.enabled is not
 # consulted in this mode). In mTLS mode the git-provider webhook routes
 # (/api/v1/r10k/*) are not served; POST /api/v1/deploys is the only way to
-# deploy, and GET /api/v1/deploys/<id> and GET /api/v1/deploys?limit=N read
-# the results back. This file is installed as config|noreplace, so upgrades
-# never overwrite your edits.
+# deploy ("wait": false answers 202 at once and the client polls; "wait": true
+# answers when the deploy has finished), and GET /api/v1/deploys/<id> and
+# GET /api/v1/deploys?limit=N read the results back. One deploy runs at a
+# time, also across processes. This file is installed as config|noreplace, so
+# upgrades never overwrite your edits.
 #
 # server:
 #   tls:
@@ -40,6 +42,11 @@ mappings: []
 #     # Never autosign a certname listed here.
 #     allowed_certnames:
 #       - stagehand-code-manager
+#     # The CA's revocation list; a revoked client certificate is refused, and a changed file is re-read within a minute. On the CA host use /etc/puppetlabs/puppetserver/ca/ca_crl.pem so `puppetserver ca revoke` takes effect at once. Default: "" (no CRL check).
+#     crl: /etc/puppetlabs/puppetserver/ca/ca_crl.pem
+#     # Optional pin: when set, a client certificate's SHA-256 fingerprint (as `puppetserver ca list --all` prints it) must also be listed. Default: [] (no pin).
+#     allowed_fingerprints:
+#       - "AB:CD:...:EF"
 #     # The server's own certificate and key; use this host's Puppet certificate.
 #     certificate: /etc/puppetlabs/puppet/ssl/certs/<this host's certname>.pem
 #     key: /etc/puppetlabs/puppet/ssl/private_keys/<this host's certname>.pem
@@ -47,8 +54,10 @@ mappings: []
 # deploys:
 #   # Where environments live; each environment's deploy marker is read from here.
 #   basedir: /etc/puppetlabs/code/environments
-#   # Where deploy state is kept (job records and the deploy lock, added in a later release).
+#   # Where deploy state is kept: job records (jobs/, mode 0600) and the deploy lock (deploy.lock). Must be absolute.
 #   state_dir: /var/lib/webhook-go
+#   # How many job records to keep; the oldest finished ones beyond this are deleted.
+#   max_jobs: 500
 #   # How long one environment's r10k or g10k run may take before it is stopped.
 #   timeout: 15m
 #   # Bytes of engine output kept per environment (the end of the output is kept).

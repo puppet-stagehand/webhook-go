@@ -22,16 +22,34 @@ const MaxListLimit = 100
 // file store never builds a path from anything else.
 var jobIDRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
+// InterruptedReason is the error Reconcile gives a job a dead process left
+// unfinished.
+const InterruptedReason = "interrupted by a restart"
+
 // FileStore keeps one JSON file per job in <state_dir>/jobs/<id>.json, so
 // records survive a restart (D-12). Files are 0600 and the directory 0700:
 // they hold repository URLs and engine output. Every write goes to a
 // temporary file that is renamed over the record, so a crash never leaves a
 // half-written record. Once a job finishes, the store deletes the oldest
 // finished records beyond maxJobs.
+//
+// Each store is an instance with a random id, and holds an flock on
+// <state_dir>/instances/<id>.lock while it is open. Records name the instance
+// that wrote them ("owner", never shown by the API), so Reconcile can tell a
+// job a dead process left behind from one another live process is running.
 type FileStore struct {
-	mu      sync.Mutex
-	dir     string // <state_dir>/jobs
-	maxJobs int
+	mu       sync.Mutex
+	stateDir string
+	dir      string // <state_dir>/jobs
+	maxJobs  int
+	instance string
+	instLock *os.File // nil when flock is unavailable
+}
+
+// storedJob is a record on disk: the job and the instance that wrote it.
+type storedJob struct {
+	Job
+	Owner string `json:"owner,omitempty"`
 }
 
 // NewFileStore opens (creating as needed) the job store under stateDir.
@@ -54,11 +72,117 @@ func NewFileStore(stateDir string, maxJobs int) (*FileStore, error) {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
-	return &FileStore{dir: dir, maxJobs: maxJobs}, nil
+	s := &FileStore{stateDir: stateDir, dir: dir, maxJobs: maxJobs, instance: newJobID()}
+	if err := s.lockInstance(); err != nil {
+		// Without it, other instances treat this one's unfinished jobs as
+		// abandoned; deploys still work.
+		log.Errorf("jobs: instance lock: %v", err)
+	}
+	return s, nil
 }
 
-// Close releases the store. Records stay on disk.
-func (s *FileStore) Close() error { return nil }
+func (s *FileStore) instancesDir() string { return filepath.Join(s.stateDir, "instances") }
+
+func (s *FileStore) lockInstance() error {
+	if err := os.MkdirAll(s.instancesDir(), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(s.instancesDir(), s.instance+".lock"), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	ok, err := tryFlockExclusive(f)
+	if err == nil && !ok {
+		err = errors.New("lock held by another process")
+	}
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return err
+	}
+	s.instLock = f
+	return nil
+}
+
+// Close releases the store's instance lock. Records stay on disk.
+func (s *FileStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.instLock == nil {
+		return nil
+	}
+	name := s.instLock.Name()
+	unflock(s.instLock)
+	err := s.instLock.Close()
+	s.instLock = nil
+	os.Remove(name)
+	return err
+}
+
+// ownerAlive reports whether the instance that wrote a record is still
+// running: its instance lock file exists and is flocked by someone else.
+// A stale lock file of a dead instance is removed.
+func (s *FileStore) ownerAlive(owner string) bool {
+	if owner == s.instance && s.instLock != nil {
+		return true
+	}
+	if !jobIDRE.MatchString(owner) {
+		return false
+	}
+	path := filepath.Join(s.instancesDir(), owner+".lock")
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	ok, err := tryFlockExclusive(f)
+	if err != nil {
+		return false
+	}
+	if !ok {
+		return true
+	}
+	unflock(f)
+	os.Remove(path)
+	return false
+}
+
+// Reconcile fails every job a dead process left queued or deploying: its
+// unfinished environments become failed "interrupted by a restart", so a
+// client never polls a job forever (T-57.6-35). Finished jobs, and jobs an
+// instance that is still running owns, are untouched. The server calls it once
+// at start, before the deploy routes accept requests. It returns how many
+// jobs it failed.
+func (s *FileStore) Reconcile() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || !e.Type().IsRegular() || !jobIDRE.MatchString(id) {
+			continue
+		}
+		rec, err := s.readStoredLocked(id)
+		if err != nil {
+			log.Errorf("jobs: reconcile: skipping %s: %v", e.Name(), err)
+			continue
+		}
+		if rec.State.Terminal() || s.ownerAlive(rec.Owner) {
+			continue
+		}
+		job := FailUnstarted(rec.Job, InterruptedReason)
+		if err := s.writeLocked(job); err != nil {
+			return n, err
+		}
+		log.Warnf("jobs: deploy %s was %s when its process stopped; marked failed", id, rec.State)
+		n++
+	}
+	return n, nil
+}
 
 func (s *FileStore) path(id string) string { return filepath.Join(s.dir, id+".json") }
 
@@ -67,17 +191,24 @@ func (s *FileStore) Save(job Job) error {
 	if !jobIDRE.MatchString(job.ID) {
 		return fmt.Errorf("jobs: invalid job id %q", job.ID)
 	}
-	b, err := json.Marshal(job)
-	if err != nil {
-		return err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := writeFileAtomic(s.dir, job.ID+".json", b); err != nil {
-		return fmt.Errorf("jobs: saving %s: %w", job.ID, err)
+	if err := s.writeLocked(job); err != nil {
+		return err
 	}
 	if job.State.Terminal() {
 		s.pruneLocked()
+	}
+	return nil
+}
+
+func (s *FileStore) writeLocked(job Job) error {
+	b, err := json.Marshal(storedJob{Job: job, Owner: s.instance})
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(s.dir, job.ID+".json", b); err != nil {
+		return fmt.Errorf("jobs: saving %s: %w", job.ID, err)
 	}
 	return nil
 }
@@ -128,18 +259,23 @@ func (s *FileStore) Get(id string) (Job, error) {
 }
 
 func (s *FileStore) readLocked(id string) (Job, error) {
+	rec, err := s.readStoredLocked(id)
+	return rec.Job, err
+}
+
+func (s *FileStore) readStoredLocked(id string) (storedJob, error) {
 	b, err := os.ReadFile(s.path(id))
 	if errors.Is(err, fs.ErrNotExist) {
-		return Job{}, ErrNotFound
+		return storedJob{}, ErrNotFound
 	}
 	if err != nil {
-		return Job{}, err
+		return storedJob{}, err
 	}
-	var j Job
-	if err := json.Unmarshal(b, &j); err != nil {
-		return Job{}, fmt.Errorf("jobs: record %s is corrupt: %w", id, err)
+	var rec storedJob
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return storedJob{}, fmt.Errorf("jobs: record %s is corrupt: %w", id, err)
 	}
-	return j, nil
+	return rec, nil
 }
 
 // List returns up to limit jobs (at most MaxListLimit), newest first.
