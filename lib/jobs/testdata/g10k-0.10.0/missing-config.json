@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/does-not-exist.yaml",
+    "-info",
+    "-branch",
+    "production"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "error parsing the config file"
+  ],
+  "extra": {
+    "cachedir_created": false,
+    "environment_dir_created": false
+  },
+  "notes": "The config path does not exist; nothing else was set up.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "missing-config",
+  "stderr": "readConfigfile(): There was an error parsing the config file /srv/work/g10k/does-not-exist.yaml: open /srv/work/g10k/does-not-exist.yaml: no such file or directory\n",
+  "stdout": "",
+  "tool": "g10k",
+  "tool_version": "0.10.0"
+}

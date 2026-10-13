@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -226,5 +227,192 @@ func TestMemoryStoreListNewestFirstAndBounded(t *testing.T) {
 	}
 	if _, err := s.Get("a"); err != ErrNotFound {
 		t.Fatalf("evicted job: err = %v", err)
+	}
+}
+
+// shaPrev is the commit an environment held before the recorded run: what a
+// seeded marker_before carries.
+const shaPrev = "3333333333333333333333333333333333333333"
+
+// fakeEngine points a runner at this test binary acting as r10k or g10k,
+// replaying fixture (an SDK harness recording copied verbatim into testdata)
+// after laying down the fixture's marker_before, an hour old.
+func fakeEngine(t *testing.T, tool, fixture, sha string, opts Options) (*Runner, string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	basedir := t.TempDir()
+	if fixture != "" {
+		t.Setenv(fakeengine.FixtureEnv, fixture)
+		if err := fakeengine.SeedBefore(fixture, basedir, shaPrev, time.Now().Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv(fakeengine.BasedirEnv, basedir)
+	t.Setenv(fakeengine.SHAEnv, sha)
+
+	opts.Engine = R10kEngine(func(env string) []string {
+		return []string{exe, "deploy", "environment", env, "--config=/etc/puppetlabs/r10k/r10k.yaml", "--modules"}
+	})
+	if tool == "g10k" {
+		opts.Engine = G10kEngine(func(env string) []string {
+			return []string{exe, "-config=/etc/puppetlabs/r10k/g10k.yaml", "-branch=" + env}
+		})
+	}
+	opts.Basedir = basedir
+	if opts.Timeout == 0 {
+		opts.Timeout = time.Minute
+	}
+	if opts.OutputLimit == 0 {
+		opts.OutputLimit = 262144
+	}
+	if opts.Store == nil {
+		opts.Store = NewMemoryStore(10)
+	}
+	r, err := NewRunner(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, basedir
+}
+
+func deployOneEnv(t *testing.T, r *Runner, env, expected string) (Job, EnvResult) {
+	t.Helper()
+	job, err := r.NewJob([]EnvRequest{{Name: env, ExpectedSHA: expected}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err = r.Run(context.Background(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return job, job.Results[0]
+}
+
+var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]")
+
+// lastStderrLine is the last non-empty line the fixture wrote to stderr.
+func lastStderrLine(f fakeengine.Fixture, sha string) string {
+	lines := strings.Split(strings.ReplaceAll(ansiRE.ReplaceAllString(f.Stderr, ""), "<SHA>", sha), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// TestNormalizeFixtureMatrix replays every copied SDK harness fixture through
+// the real runner and Normalize (research Pitfall 3). Each misleading outcome
+// must end failed, its error naming the first unmet condition; each success
+// must end deployed. Fixture sources (verbatim copies, never edited):
+// stagehand-sdk-public harness/fixtures/r10k-5.0.3/*.json and
+// harness/fixtures/g10k-0.10.0/*.json.
+type matrixCase struct {
+	name, tool, fixture, env string
+	wroteSHA, expected       string // what the engine deploys; what the caller expects
+	exitOverride             string
+	wantState                State
+	wantErr                  string // prefix
+	wantMarker, wantSuccess  bool
+	wantDeployedSHA          string
+}
+
+// fixtureMatrix is one case per copied fixture, both engines, plus the
+// misleading variants (a wrong commit, an exit code masked to 0).
+var fixtureMatrix = []matrixCase{
+	// r10k 5.0.3
+	{"r10k deploy-success", "r10k", "deploy-success", "production", shaA, shaA, "", StateDeployed, "", true, true, shaA},
+	{"r10k fresh marker, wrong commit", "r10k", "deploy-success", "production", shaB, shaA, "", StateFailed, "deployed " + shaB + ", expected " + shaA, true, true, shaB},
+	{"r10k unknown-environment", "r10k", "unknown-environment", "nosuchenv", shaA, shaA, "", StateFailed, "engine exited 1: ", false, false, ""},
+	{"r10k unreachable-remote", "r10k", "unreachable-remote", "production", shaA, shaA, "", StateFailed, "engine exited 1: ", true, true, ""},
+	{"r10k bad-module-ref (checkout moved, marker unchanged)", "r10k", "bad-module-ref", "production", shaA, shaA, "", StateFailed, "engine exited 1: ", true, true, ""},
+	{"r10k bad-module-ref, exit code masked", "r10k", "bad-module-ref", "production", shaA, shaA, "0", StateFailed, "marker not rewritten by this run", true, true, ""},
+	{"r10k missing-config", "r10k", "missing-config", "production", shaA, shaA, "", StateFailed, "engine exited 1: ", false, false, ""},
+	{"r10k readonly-cachedir", "r10k", "readonly-cachedir", "production", shaA, shaA, "", StateFailed, "engine exited 1: ", true, true, ""},
+	// g10k 0.10.0
+	{"g10k deploy-success", "g10k", "deploy-success", "production", shaA, shaA, "", StateDeployed, "", true, true, shaA},
+	{"g10k fresh marker, wrong commit", "g10k", "deploy-success", "production", shaB, shaA, "", StateFailed, "deployed " + shaB + ", expected " + shaA, true, true, shaB},
+	{"g10k unknown-environment exits 0", "g10k", "unknown-environment", "nosuchenv", shaA, shaA, "", StateFailed, "no deploy marker", false, false, ""},
+	{"g10k unreachable-remote exits 0", "g10k", "unreachable-remote", "production", shaA, shaA, "", StateFailed, "marker not rewritten by this run", true, true, ""},
+	{"g10k bad-module-ref", "g10k", "bad-module-ref", "production", shaA, shaA, "", StateFailed, "engine exited 1: ", true, false, shaA},
+	{"g10k bad-module-ref, exit code masked", "g10k", "bad-module-ref", "production", shaA, shaA, "0", StateFailed, "marker reports deploy_success false", true, false, shaA},
+	{"g10k missing-config", "g10k", "missing-config", "production", shaA, shaA, "", StateFailed, "engine exited 1: ", false, false, ""},
+	{"g10k readonly-cachedir", "g10k", "readonly-cachedir", "production", shaA, shaA, "", StateFailed, "engine exited 1: ", true, true, ""},
+}
+
+var fixtureDirs = map[string]string{"r10k": "testdata/r10k-5.0.3", "g10k": "testdata/g10k-0.10.0"}
+
+func TestNormalizeFixtureMatrix(t *testing.T) {
+	for _, tc := range fixtureMatrix {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(fixtureDirs[tc.tool], tc.fixture+".json")
+			fx, err := fakeengine.LoadFixture(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.exitOverride != "" {
+				t.Setenv(fakeengine.ExitCodeEnv, tc.exitOverride)
+			}
+			r, _ := fakeEngine(t, tc.tool, path, tc.wroteSHA, Options{})
+			job, res := deployOneEnv(t, r, tc.env, tc.expected)
+
+			if job.Engine != tc.tool || res.State != tc.wantState || job.State != tc.wantState {
+				t.Fatalf("engine %s, job %s, env %s (%s); want %s %s", job.Engine, job.State, res.State, res.Error, tc.tool, tc.wantState)
+			}
+			if !strings.HasPrefix(res.Error, tc.wantErr) || (tc.wantErr == "" && res.Error != "") {
+				t.Fatalf("error = %q, want prefix %q", res.Error, tc.wantErr)
+			}
+			if res.MarkerPresent != tc.wantMarker || res.MarkerDeploySuccess != tc.wantSuccess || res.DeployedSHA != tc.wantDeployedSHA {
+				t.Fatalf("marker present %v, deploy_success %v, deployed_sha %q; want %v %v %q",
+					res.MarkerPresent, res.MarkerDeploySuccess, res.DeployedSHA, tc.wantMarker, tc.wantSuccess, tc.wantDeployedSHA)
+			}
+			// A non-zero exit carries the end of the engine's stderr.
+			if strings.HasPrefix(tc.wantErr, "engine exited") {
+				if want := lastStderrLine(fx, tc.wroteSHA); !strings.Contains(res.Error, want) {
+					t.Fatalf("error %q lacks the stderr tail %q", res.Error, want)
+				}
+			}
+			// The replay is faithful: the lines the harness expects are in the output.
+			for _, line := range fx.ExpectLines {
+				if line = strings.ReplaceAll(line, "<SHA>", tc.wroteSHA); !strings.Contains(res.Output, line) {
+					t.Fatalf("output lacks expected line %q:\n%s", line, res.Output)
+				}
+			}
+		})
+	}
+
+}
+
+// Every fixture copied into testdata is in the matrix.
+func TestFixtureMatrixCoversEveryFixture(t *testing.T) {
+	covered := map[string]bool{}
+	for _, tc := range fixtureMatrix {
+		covered[filepath.Join(fixtureDirs[tc.tool], tc.fixture+".json")] = true
+	}
+	for _, dir := range fixtureDirs {
+		files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+		if len(files) < 3 {
+			t.Errorf("%s holds %d fixtures, want at least 3", dir, len(files))
+		}
+		for _, f := range files {
+			if !covered[f] {
+				t.Errorf("fixture %s is not in the matrix", f)
+			}
+		}
+	}
+}
+
+func TestOutputIsBounded(t *testing.T) {
+	t.Setenv(fakeengine.ModeEnv, "flood") // 1 MiB of output, then exit 0
+	r, _ := fakeEngine(t, "r10k", "", shaA, Options{OutputLimit: 4096})
+	_, res := deployOneEnv(t, r, "production", shaA)
+	if len(res.Output) > 4096 || !res.OutputTruncated {
+		t.Fatalf("output %d bytes, truncated=%v; want at most 4096 and truncated", len(res.Output), res.OutputTruncated)
+	}
+	if res.State != StateFailed || res.Error != "no deploy marker" {
+		t.Fatalf("result = %s %q", res.State, res.Error)
 	}
 }

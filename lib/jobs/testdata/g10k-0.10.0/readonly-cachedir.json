@@ -1,0 +1,65 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/g10k.yaml",
+    "-info",
+    "-branch",
+    "production"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "is not writable"
+  ],
+  "extra": {
+    "cachedir_writable_by_deploy": false,
+    "chmod_scope": "recursive a-w as deploy, never root",
+    "environment_intact": true,
+    "marker_changed": false,
+    "marker_changed_fields": null,
+    "marker_deploy_success": true,
+    "tree_changed": false
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "git_dir",
+    "git_url",
+    "name",
+    "puppetfile_checksum",
+    "signature",
+    "started_at"
+  ],
+  "notes": "After a first successful deploy the whole cache directory was made read-only for the deploy user (root would ignore it, Pitfall 7).",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "readonly-cachedir",
+  "stderr": "checkDirAndCreate(): Error: /srv/work/g10k/cache exists, but is not writable! Exiting!\n",
+  "stdout": "",
+  "tool": "g10k",
+  "tool_version": "0.10.0",
+  "tree_hash_after": "ab65737e1e8eaed3",
+  "tree_hash_before": "ab65737e1e8eaed3",
+  "tree_hash_excl_markers_after": "b59cf6bab3515e87",
+  "tree_hash_excl_markers_before": "b59cf6bab3515e87"
+}

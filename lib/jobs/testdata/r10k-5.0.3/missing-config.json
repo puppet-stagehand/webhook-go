@@ -1,0 +1,29 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/does-not-exist.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "Couldn't load config file"
+  ],
+  "extra": {
+    "cachedir_created": false,
+    "environment_dir_created": false
+  },
+  "notes": "The config path does not exist; nothing else was set up.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "missing-config",
+  "stderr": "\u001b[31m\nr10k: Runtime error: #<R10K::Settings::Loader::ConfigError: Couldn't load config file: No such file or directory @ rb_sysopen - /srv/work/r10k/does-not-exist.yaml>\u001b[0m\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3"
+}

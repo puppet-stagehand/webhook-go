@@ -1,0 +1,78 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "Could not resolve desired ref 'no-such-branch'"
+  ],
+  "extra": {
+    "checkout_moved": true,
+    "marker_changed": false,
+    "marker_changed_fields": null,
+    "marker_deploy_success": true,
+    "marker_signature_is_new_commit": false,
+    "marker_signature_is_prev_commit": true,
+    "module_dir_kept": true,
+    "tree_changed": true
+  },
+  "files_changed": [
+    "Puppetfile"
+  ],
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "A new control commit changed the Puppetfile so module m names a branch that does not exist.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "bad-module-ref",
+  "stderr": "INFO\t -> Deploying environment /srv/work/r10k/environments/production\nINFO\t -> Environment production is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k/environments/production/Puppetfile'\nINFO\t -> Deploying module to /srv/work/r10k/environments/production/modules/m\nERROR\t -> Module m failed to synchronize due to Unable to manage Puppetfile content 'm': Could not resolve desired ref 'no-such-branch' and no default provided. r10k no longer hardcodes 'master' as the default ref. Consider setting a ref per module in the Puppetfile or setting git:default_ref in your r10k config.\nERROR\t -> Error during concurrent deploy of a module: Unable to manage Puppetfile content 'm': Could not resolve desired ref 'no-such-branch' and no default provided. r10k no longer hardcodes 'master' as the default ref. Consider setting a ref per module in the Puppetfile or setting git:default_ref in your r10k config.\nERROR\t -> Unable to manage Puppetfile content 'm': Could not resolve desired ref 'no-such-branch' and no default provided. r10k no longer hardcodes 'master' as the default ref. Consider setting a ref per module in the Puppetfile or setting git:default_ref in your r10k config.\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "1d13c32db4bb32b6",
+  "tree_hash_before": "e0b9da7b3e302c05",
+  "tree_hash_excl_markers_after": "e915fe5e1417008f",
+  "tree_hash_excl_markers_before": "05eedc9945944ff3"
+}

@@ -17,7 +17,7 @@
 //     recorded run changed the marker (extra.marker_changed, true when the
 //     fixture does not say), and otherwise leaves the marker as it was;
 //   - appends "<start> <end>" in Unix nanoseconds to TimesLogEnv, when set;
-//   - exits with the fixture's exit code.
+//   - exits with the fixture's exit code (or ExitCodeEnv, when set).
 //
 // The world before the recorded run (marker_before) is laid down by the test
 // with SeedBefore, never by the fake: that is what lets a stale marker look
@@ -62,6 +62,9 @@ const (
 	FloodBytesEnv = "WEBHOOK_GO_FAKE_ENGINE_FLOOD_BYTES"
 	// PIDFileEnv is where the child started by "hang" writes its pid.
 	PIDFileEnv = "WEBHOOK_GO_FAKE_ENGINE_PIDFILE"
+	// ExitCodeEnv, when set, replaces the fixture's exit code: it shows that
+	// a verdict does not rest on the exit code alone.
+	ExitCodeEnv = "WEBHOOK_GO_FAKE_ENGINE_EXIT_CODE"
 )
 
 // Fixture is the subset of an SDK harness fixture the fake replays.
@@ -244,6 +247,9 @@ func run(fixturePath string, args []string) (int, error) {
 		if err := appendLine(log, []byte(fmt.Sprintf("%d %d", start.UnixNano(), time.Now().UnixNano()))); err != nil {
 			return 0, err
 		}
+	}
+	if s := os.Getenv(ExitCodeEnv); s != "" {
+		return strconv.Atoi(s)
 	}
 	return f.ExitCode, nil
 }

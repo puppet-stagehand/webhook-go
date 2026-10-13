@@ -1,0 +1,78 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/g10k.yaml",
+    "-info",
+    "-branch",
+    "production"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "Failed to resolve git module 'm'"
+  ],
+  "extra": {
+    "checkout_moved": true,
+    "marker_changed": true,
+    "marker_changed_fields": [
+      "deploy_success",
+      "finished_at",
+      "git_dir",
+      "git_url",
+      "puppetfile_checksum",
+      "signature",
+      "started_at"
+    ],
+    "marker_deploy_success": false,
+    "marker_signature_is_new_commit": true,
+    "marker_signature_is_prev_commit": false,
+    "module_dir_kept": true,
+    "tree_changed": true
+  },
+  "files_changed": [
+    ".g10k-deploy.json",
+    "Puppetfile"
+  ],
+  "marker_after": {
+    "deploy_success": false,
+    "finished_at": "<TS>",
+    "git_dir": "",
+    "git_url": "",
+    "name": "production",
+    "puppetfile_checksum": "",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "git_dir",
+    "git_url",
+    "name",
+    "puppetfile_checksum",
+    "signature",
+    "started_at"
+  ],
+  "notes": "A new control commit changed the Puppetfile so module m names a branch that does not exist.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "bad-module-ref",
+  "stderr": "Failed to resolve git module 'm' with repository file:///srv/git/module-fixture.git and branch/reference 'no-such-branch' used in control repository branch 'production' or Puppet environment 'production'\n",
+  "stdout": "Need to sync /srv/work/g10k/environments/production\nDetected control repo change, but trying to preserve module dir /srv/work/g10k/environments/production/modules\n",
+  "tool": "g10k",
+  "tool_version": "0.10.0",
+  "tree_hash_after": "268c8f994e221256",
+  "tree_hash_before": "b36bd697526c5363",
+  "tree_hash_excl_markers_after": "10ed5566e80f95f9",
+  "tree_hash_excl_markers_before": "b59cf6bab3515e87"
+}

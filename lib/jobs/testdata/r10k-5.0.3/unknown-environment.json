@@ -1,0 +1,76 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "nosuchenv",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "cannot be found in any source"
+  ],
+  "extra": {
+    "environment_dir_created": false,
+    "environments_entries": [
+      "production"
+    ],
+    "marker_changed": false,
+    "marker_changed_fields": null,
+    "marker_deploy_success": true,
+    "production_environment_intact": true,
+    "tree_changed": false
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "Production was deployed first; the second deploy names an environment that matches no branch of the control repo. marker_* describe production.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "unknown-environment",
+  "stderr": "ERROR\t -> Environment(s) 'nosuchenv' cannot be found in any source and will not be deployed.\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "dea0eeb4c0de8a94",
+  "tree_hash_before": "dea0eeb4c0de8a94",
+  "tree_hash_excl_markers_after": "05eedc9945944ff3",
+  "tree_hash_excl_markers_before": "05eedc9945944ff3"
+}

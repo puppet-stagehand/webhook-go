@@ -1,0 +1,72 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "does not appear to be a git repository"
+  ],
+  "extra": {
+    "environment_intact": true,
+    "marker_changed": false,
+    "marker_changed_fields": null,
+    "marker_deploy_success": true,
+    "tree_changed": false
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "The control repo was renamed away after a first successful deploy, then the same deploy was run again.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "unreachable-remote",
+  "stderr": "ERROR\t -> Unable to determine current branches for Git source 'control' (/srv/work/r10k/environments)\nOriginal exception:\nCommand exited with non-zero exit code:\nCommand: git --git-dir /srv/work/r10k/cache/file----srv-git-control.git fetch origin --prune\nStderr:\nfatal: '/srv/git/control.git' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\nExit code: 128\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "bd1cbc7b7722b1bb",
+  "tree_hash_before": "bd1cbc7b7722b1bb",
+  "tree_hash_excl_markers_after": "05eedc9945944ff3",
+  "tree_hash_excl_markers_before": "05eedc9945944ff3"
+}

@@ -1,0 +1,67 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/g10k.yaml",
+    "-info",
+    "-branch",
+    "nosuchenv"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Synced"
+  ],
+  "extra": {
+    "environment_dir_created": false,
+    "environments_entries": [
+      "production"
+    ],
+    "marker_changed": false,
+    "marker_changed_fields": null,
+    "marker_deploy_success": true,
+    "production_environment_intact": true,
+    "tree_changed": false
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "git_dir",
+    "git_url",
+    "name",
+    "puppetfile_checksum",
+    "signature",
+    "started_at"
+  ],
+  "notes": "Production was deployed first; the second deploy names an environment that matches no branch of the control repo. marker_* describe production.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "unknown-environment",
+  "stderr": "",
+  "stdout": "Synced /srv/work/g10k/g10k.yaml with branch nosuchenv with 0 git repositories and 0 Forge modules in <DUR> with git (<DUR> sync, I/O <DUR>) and Forge (<DUR> query+download, I/O <DUR>) using 50 resolve and 20 extract workers\n",
+  "tool": "g10k",
+  "tool_version": "0.10.0",
+  "tree_hash_after": "9daea85a613a61c7",
+  "tree_hash_before": "9daea85a613a61c7",
+  "tree_hash_excl_markers_after": "b59cf6bab3515e87",
+  "tree_hash_excl_markers_before": "b59cf6bab3515e87"
+}
