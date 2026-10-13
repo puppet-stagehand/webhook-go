@@ -174,3 +174,100 @@ func TestFileStoreListCapsAt100(t *testing.T) {
 		t.Fatalf("List(1000) = %d jobs, %v; want 100", len(list), err)
 	}
 }
+
+func TestReconcileFailsInterruptedJobs(t *testing.T) {
+	stateDir := t.TempDir()
+	base := time.Now().Add(-time.Hour)
+
+	// A previous process left work in flight, then died.
+	dead, err := NewFileStore(stateDir, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued := finishedJob(t, base)
+	queued.State, queued.StartedAt, queued.FinishedAt = StateQueued, nil, nil
+	queued.Results[0] = EnvResult{Environment: "production", State: StateQueued, ExpectedSHA: shaA}
+
+	deploying := finishedJob(t, base.Add(time.Minute))
+	deploying.State, deploying.FinishedAt = StateDeploying, nil
+	deploying.Results = append(deploying.Results,
+		EnvResult{Environment: "staging", State: StateDeploying, ExpectedSHA: shaA},
+		EnvResult{Environment: "dev", State: StateQueued, ExpectedSHA: shaA})
+
+	deployed := finishedJob(t, base.Add(2*time.Minute))
+	failed := finishedJob(t, base.Add(3*time.Minute))
+	failed.State, failed.Results[0].State, failed.Results[0].Error = StateFailed, StateFailed, "engine exited 1"
+	for _, j := range []Job{queued, deploying, deployed, failed} {
+		if err := dead.Save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := dead.Close(); err != nil {
+		t.Fatal(err)
+	}
+	terminalBefore := map[string][]byte{}
+	for _, id := range []string{deployed.ID, failed.ID} {
+		b, err := os.ReadFile(filepath.Join(stateDir, "jobs", id+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminalBefore[id] = b
+	}
+
+	s, err := NewFileStore(stateDir, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	n, err := s.Reconcile()
+	if err != nil || n != 2 {
+		t.Fatalf("Reconcile = %d, %v; want 2", n, err)
+	}
+
+	got, _ := s.Get(queued.ID)
+	if got.State != StateFailed || got.FinishedAt == nil || got.Results[0].State != StateFailed ||
+		got.Results[0].Error != "interrupted by a restart" {
+		t.Fatalf("queued job after Reconcile = %+v", got)
+	}
+	got, _ = s.Get(deploying.ID)
+	if got.State != StateFailed || got.FinishedAt == nil {
+		t.Fatalf("deploying job after Reconcile = %+v", got)
+	}
+	if r := got.Results[0]; r.State != StateDeployed || r.Error != "" {
+		t.Fatalf("an environment that finished was rewritten: %+v", r)
+	}
+	for _, r := range got.Results[1:] {
+		if r.State != StateFailed || r.Error != "interrupted by a restart" {
+			t.Fatalf("unfinished environment after Reconcile = %+v", r)
+		}
+	}
+	for id, before := range terminalBefore {
+		after, err := os.ReadFile(filepath.Join(stateDir, "jobs", id+".json"))
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("terminal job %s was touched", id)
+		}
+	}
+
+	// A job owned by a process that is still running is left alone, until
+	// that process is gone.
+	live, err := NewFileStore(stateDir, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := finishedJob(t, time.Now())
+	running.State, running.FinishedAt = StateDeploying, nil
+	running.Results[0].State = StateDeploying
+	if err := live.Save(running); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.Reconcile(); err != nil || n != 0 {
+		t.Fatalf("Reconcile with a live owner = %d, %v; want 0", n, err)
+	}
+	if got, _ := s.Get(running.ID); got.State != StateDeploying {
+		t.Fatalf("a live process's job was failed: %+v", got)
+	}
+	live.Close()
+	if n, err := s.Reconcile(); err != nil || n != 1 {
+		t.Fatalf("Reconcile after the owner exited = %d, %v; want 1", n, err)
+	}
+}
