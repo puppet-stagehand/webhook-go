@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -325,6 +326,86 @@ func TestLegacyRoutesAbsentInMTLSMode(t *testing.T) {
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/deploys", nil))
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("deploy API answered %d with mTLS off, want 404", w.Code)
+		}
+	})
+}
+
+// Go's crypto/tls skips VerifyPeerCertificate when a session is resumed, so a
+// check placed there would let a resumed session through. Two servers share
+// session-ticket keys; the client gets a ticket from the first, then resumes
+// against the second. The positive control proves resumption really happens;
+// the negative case proves the allow-list is enforced on a resumed session.
+func TestMTLSAllowListEnforcedOnResumedSession(t *testing.T) {
+	f := newMTLSFixture(t, "stagehand-code-manager")
+	cert := clientCert(t, f.ca, "stagehand-code-manager")
+	var ticketKey [32]byte
+	if _, err := rand.Read(ticketKey[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	serveWith := func(t *testing.T, allowed ...string) string {
+		conf := f.conf
+		conf.Server.TLS.AllowedCertnames = allowed
+		srv, err := newMTLSServer(conf, NewRouter())
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv.TLSConfig.SetSessionTicketKeys([][32]byte{ticketKey})
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		go srv.ServeTLS(ln, "", "")
+		t.Cleanup(func() { srv.Close() })
+		return "https://" + ln.Addr().String()
+	}
+
+	newClient := func(cache tls.ClientSessionCache) *http.Client {
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(f.ca.pem)
+		return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+			DisableKeepAlives: true,
+			TLSClientConfig: &tls.Config{
+				RootCAs: pool, MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{*cert},
+				ServerName:         "localhost", // one session-cache key across both servers
+				ClientSessionCache: cache,
+			},
+		}}
+	}
+
+	get := func(c *http.Client, url string) (*http.Response, error) {
+		resp, err := c.Get(url + "/health")
+		if err == nil {
+			io.Copy(io.Discard, resp.Body) // reading lets the client store the TLS 1.3 ticket
+			resp.Body.Close()
+		}
+		return resp, err
+	}
+
+	t.Run("control: a resumed session is accepted when listed", func(t *testing.T) {
+		cache := tls.NewLRUClientSessionCache(4)
+		c := newClient(cache)
+		if _, err := get(c, serveWith(t, "stagehand-code-manager")); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := get(c, serveWith(t, "stagehand-code-manager"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.TLS.DidResume {
+			t.Fatal("second connection did not resume; the negative case would prove nothing")
+		}
+	})
+
+	t.Run("a resumed session is refused when no longer listed", func(t *testing.T) {
+		cache := tls.NewLRUClientSessionCache(4)
+		c := newClient(cache)
+		if _, err := get(c, serveWith(t, "stagehand-code-manager")); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := get(c, serveWith(t, "someone-else"))
+		if err == nil {
+			t.Fatalf("resumed session accepted (DidResume=%v, status %d)", resp.TLS.DidResume, resp.StatusCode)
 		}
 	})
 }

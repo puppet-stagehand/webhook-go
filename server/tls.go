@@ -63,12 +63,18 @@ func newMTLSServer(cfg config.Config, handler http.Handler) (*http.Server, error
 			Certificates: []tls.Certificate{pair},
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 			ClientCAs:    pool,
-			// Runs only after the chain verified against ClientCAs.
-			VerifyPeerCertificate: func(_ [][]byte, verifiedChains [][]*x509.Certificate) error {
-				if len(verifiedChains) == 0 || len(verifiedChains[0]) == 0 {
+			// VerifyConnection, not VerifyPeerCertificate: crypto/tls skips
+			// VerifyPeerCertificate when a session is resumed, but calls
+			// VerifyConnection on every handshake, resumed ones included, with
+			// the chains verified against ClientCAs when the session began.
+			// Every per-certificate check (the allow-list here; the CRL and
+			// fingerprint pin of plan 57.6-06) must live in this callback, or a
+			// resumed session skips it (TestMTLSAllowListEnforcedOnResumedSession).
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
 					return errCertnameNotAllowed
 				}
-				cn := verifiedChains[0][0].Subject.CommonName
+				cn := cs.VerifiedChains[0][0].Subject.CommonName
 				if !allowed[cn] {
 					// The certname only; never the certificate.
 					log.Warnf("mTLS: refused client certname %q: not in server.tls.allowed_certnames", cn)
