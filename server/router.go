@@ -1,6 +1,8 @@
 package server
 
 import (
+	log "github.com/sirupsen/logrus"
+
 	"github.com/gin-gonic/gin"
 	wapi "github.com/voxpupuli/webhook-go/api"
 	"github.com/voxpupuli/webhook-go/config"
@@ -33,12 +35,25 @@ func NewRouter() *gin.Engine {
 	{
 		v1 := api.Group("v1")
 		{
-			r10k := v1.Group("r10k") // Group r10k-related routes.
-			{
-				module := new(wapi.ModuleController)
-				r10k.POST("/module", module.DeployModule) // Route for deploying a module.
-				environment := new(wapi.EnvironmentController)
-				r10k.POST("/environment", environment.DeployEnvironment) // Route for deploying an environment.
+			// Stagehand: in mTLS mode (server.tls.client_ca set) every connection
+			// must present an allow-listed client certificate, so a git
+			// provider's webhook could never reach the r10k routes; they are not
+			// registered, and /api/v1/deploys is the only way to deploy. With
+			// mTLS off, upstream routing is unchanged and the deploy API is absent.
+			if conf := config.GetConfig(); conf.MTLSEnabled() {
+				deploys, err := wapi.NewDeploysController(conf)
+				if err != nil {
+					log.Fatalf("deploy API: %v", err)
+				}
+				deploys.Register(v1)
+			} else {
+				r10k := v1.Group("r10k") // Group r10k-related routes.
+				{
+					module := new(wapi.ModuleController)
+					r10k.POST("/module", module.DeployModule) // Route for deploying a module.
+					environment := new(wapi.EnvironmentController)
+					r10k.POST("/environment", environment.DeployEnvironment) // Route for deploying an environment.
+				}
 			}
 
 			queue := v1.Group("queue") // Group queue-related routes.
