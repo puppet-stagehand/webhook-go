@@ -416,3 +416,21 @@ func TestOutputIsBounded(t *testing.T) {
 		t.Fatalf("result = %s %q", res.State, res.Error)
 	}
 }
+
+func TestSummariseStderr(t *testing.T) {
+	for _, tc := range []struct {
+		in        string
+		truncated bool
+		want      string
+	}{
+		{"\x1b[31m\nr10k: Runtime error\x1b[0m\n", false, "r10k: Runtime error"},
+		{"ERROR -> a\n\nExit code: 128\n", false, "ERROR -> a | Exit code: 128"},
+		{"ial line\nERROR -> whole\n", true, "ERROR -> whole"},
+		{"one long cut line", true, "...one long cut line"},
+		{"", false, ""},
+	} {
+		if got := summariseStderr(tc.in, tc.truncated); got != tc.want {
+			t.Errorf("summariseStderr(%q, %v) = %q, want %q", tc.in, tc.truncated, got, tc.want)
+		}
+	}
+}

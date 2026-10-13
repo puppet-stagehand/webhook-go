@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -281,9 +284,15 @@ func (r *Runner) deployOne(ctx context.Context, res EnvResult) EnvResult {
 	ctx, cancel := context.WithTimeout(ctx, r.opts.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// The engine leads its own process group (SysProcAttr Setpgid, see
+	// proc_unix.go) and a timeout kills the whole group: git children too.
+	inProcessGroup(cmd)
 	out := &tailBuffer{limit: r.opts.OutputLimit}
+	errTail := &tailBuffer{limit: stderrTailLimit}
 	cmd.Stdout = out
-	cmd.Stderr = out
+	cmd.Stderr = io.MultiWriter(out, errTail)
+	// If a grandchild escaped the group and holds the output pipe, stop
+	// waiting for it this long after the kill.
 	cmd.WaitDelay = 10 * time.Second
 
 	res.StartedAt = time.Now().UTC()
@@ -291,7 +300,7 @@ func (r *Runner) deployOne(ctx context.Context, res EnvResult) EnvResult {
 	runErr := cmd.Run()
 	res.FinishedAt = time.Now().UTC()
 	res.DurationMS = res.FinishedAt.Sub(res.StartedAt).Milliseconds()
-	res.Output, res.OutputTruncated = out.String(), out.truncated
+	res.Output, res.OutputTruncated = out.snapshot()
 
 	var exitErr *exec.ExitError
 	switch {
@@ -299,6 +308,9 @@ func (r *Runner) deployOne(ctx context.Context, res EnvResult) EnvResult {
 		res.ExitCode = 0
 	case errors.As(runErr, &exitErr):
 		res.ExitCode = exitErr.ExitCode()
+	case cmd.ProcessState != nil:
+		// It ran, but Wait gave up on its output pipes (exec.ErrWaitDelay).
+		res.ExitCode = cmd.ProcessState.ExitCode()
 	default:
 		res.State, res.ExitCode, res.Error = StateFailed, -1, "engine did not start: "+runErr.Error()
 		return res
@@ -322,24 +334,73 @@ func (r *Runner) deployOne(ctx context.Context, res EnvResult) EnvResult {
 		res.MarkerDeploySuccess = marker.DeploySuccess != nil && *marker.DeploySuccess
 	}
 	res.State, res.DeployedSHA, res.Error = Normalize(res.ExitCode, marker, res.StartedAt, res.ExpectedSHA)
+	if res.ExitCode != 0 {
+		if tail := summariseStderr(errTail.snapshot()); tail != "" {
+			res.Error += ": " + tail
+		}
+	}
 	return res
 }
 
+// stderrTailLimit bounds the stderr appended to an "engine exited N" error.
+const stderrTailLimit = 512
+
+var ansiEscapeRE = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]")
+
+// summariseStderr turns the end of an engine's stderr into one line: a line
+// cut by the bound dropped (or marked "..." when it is the only one), colour
+// codes removed, blank lines dropped, lines joined with " | ".
+func summariseStderr(s string, truncated bool) string {
+	if truncated {
+		if i := strings.IndexByte(s, '\n'); i >= 0 && strings.TrimSpace(s[i+1:]) != "" {
+			s = s[i+1:]
+		} else {
+			s = "..." + s
+		}
+	}
+	var lines []string
+	for _, l := range strings.Split(ansiEscapeRE.ReplaceAllString(s, ""), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return strings.Join(lines, " | ")
+}
+
 // tailBuffer keeps the last limit bytes written to it; the end of an engine's
-// output is where its error is.
+// output is where its error is. stdout and stderr are copied by separate
+// goroutines, so writes are locked.
 type tailBuffer struct {
+	mu        sync.Mutex
 	limit     int
 	buf       []byte
 	truncated bool
 }
 
 func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(p)
+	if len(p) > b.limit {
+		p = p[len(p)-b.limit:]
+		b.truncated = true
+	}
 	b.buf = append(b.buf, p...)
 	if over := len(b.buf) - b.limit; over > 0 {
 		b.buf = append(b.buf[:0], b.buf[over:]...)
 		b.truncated = true
 	}
-	return len(p), nil
+	return n, nil
 }
 
-func (b *tailBuffer) String() string { return string(b.buf) }
+func (b *tailBuffer) String() string {
+	s, _ := b.snapshot()
+	return s
+}
+
+// snapshot returns what is kept and whether anything was cut.
+func (b *tailBuffer) snapshot() (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf), b.truncated
+}
