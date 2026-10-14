@@ -103,7 +103,7 @@ release:
         **The mTLS deploy API (/api/v1/deploys) needs Linux.** It uses flock and
         process groups; only linux amd64 and arm64 builds are published.
 
-        Verify before you pin (needs cosign 2.x or later):
+        Verify before you pin (needs cosign 2.4 or later; 3.x recommended):
 
         ```sh
         cosign verify-blob --bundle checksums.txt.sigstore.json \

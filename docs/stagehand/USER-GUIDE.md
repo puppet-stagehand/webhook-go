@@ -55,7 +55,7 @@ By hand:
 
 1. Download the `.deb` or `.rpm` for your CPU and `checksums.txt` plus `checksums.txt.sigstore.json` from the
    release page, https://github.com/puppet-stagehand/webhook-go/releases.
-2. Check the signature once (it needs `cosign` 2.x or later):
+2. Check the signature once (it needs `cosign` 2.4 or later; 3.x recommended):
 
    ```sh
    TAG=v2.15.1-stagehand.1
