@@ -1,3 +1,31 @@
+# Webhook Go: Stagehand fork
+
+This is `puppet-stagehand/webhook-go`, a fork of [voxpupuli/webhook-go](https://github.com/voxpupuli/webhook-go) kept by the Stagehand project. Its default branch is `stagehand`, which is upstream tag **v2.15.1** plus the changes below. Upstream's own README follows the divider, unchanged.
+
+## Stagehand fork
+
+**Why it exists.** Stagehand's Advanced Code Manager pack deploys Puppet code to Puppet Core primaries, which have no Code Manager. It needs a deploy service on the primary that only Stagehand can call, and whose answer is trustworthy: "deployed" has to mean the environment is now at the commit the caller asked for. Upstream webhook-go triggers r10k from git-provider webhooks with a shared password, and it reports success from r10k's exit code. This fork adds a second mode for Stagehand and leaves the upstream mode as it was.
+
+**What it changes.**
+
+- **mTLS with Puppet certificates.** Setting `server.tls.client_ca` switches the server to mTLS-only mode. A client must present a certificate signed by the estate's Puppet CA whose certname is on `server.tls.allowed_certnames`. This is checked on every handshake, resumed TLS sessions included.
+- **Revocation and pinning.** `server.tls.crl` refuses revoked certificates and is re-read when the file changes. `server.tls.allowed_fingerprints` can also pin the exact certificate.
+- **A deploy status and result API.** `POST /api/v1/deploys`, `GET /api/v1/deploys/{id}` and `GET /api/v1/deploys?limit=N`. One deploy runs at a time, across processes too. Job records survive a restart.
+- **Honest results from both engines.** r10k and g10k are judged the same way: an environment is `deployed` only when the engine exited 0, this run rewrote the environment's deploy marker, the marker says the deploy succeeded, and the marker's commit SHA equals the SHA the caller expected.
+- In mTLS mode the upstream git-provider routes (`/api/v1/r10k/*`) are not served.
+- Releases are built for **Linux amd64 and arm64 only**, as `.deb`, `.rpm` and `.tar.gz`, with a keyless cosign signature, SBOMs and a provenance attestation. The deploy API needs Linux (flock and process groups).
+
+**Guides.**
+
+- [User guide](docs/stagehand/USER-GUIDE.md): what it does, every setting, the API, and how to install it with the `stagehand::webhook` Puppet class. Written for newcomers.
+- [Tester guide](docs/stagehand/TESTER-GUIDE.md): manual checks on a lab primary, each with the expected result.
+- [Maintaining the fork](docs/stagehand/MAINTAINING.md): the branch model, rebasing onto a new upstream tag, and cutting and verifying a release.
+- [CHANGELOG](CHANGELOG.md): the fork's releases.
+
+Report fork problems at https://github.com/puppet-stagehand/webhook-go/issues, not upstream.
+
+---
+
 # Webhook Go
 
 Webhook Go is a port of the [puppet_webhook](https://github.com/voxpupuli/puppet_webhook) Sinatra API server to Go.

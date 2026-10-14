@@ -1,0 +1,69 @@
+name: upstream-watch
+
+# RL-04: once a week, compare upstream voxpupuli/webhook-go's latest release with the
+# base this fork is built on (the "upstream-base" line in docs/stagehand/MAINTAINING.md
+# on the stagehand branch). When upstream is newer, open an issue so security releases
+# are not missed. See MAINTAINING.md "Upstream watch".
+#
+# No checkout and no third-party actions: it uses the gh CLI that GitHub-hosted runners
+# ship, and it needs only permission to open issues.
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Compare upstream's latest release with the fork's base
+        run: |
+          set -euo pipefail
+          semver='^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+          latest=$(gh api repos/voxpupuli/webhook-go/releases/latest --jq .tag_name)
+          if ! [[ "$latest" =~ $semver ]]; then
+            echo "::error::unexpected upstream tag name: refusing to use it" >&2
+            exit 1
+          fi
+
+          base=$(gh api "repos/${REPO}/contents/docs/stagehand/MAINTAINING.md?ref=stagehand" \
+                   -H 'Accept: application/vnd.github.raw' \
+                 | sed -n 's/.*<!-- upstream-base: \(v[0-9.]*\) -->.*/\1/p' | head -1)
+          if ! [[ "$base" =~ $semver ]]; then
+            echo "::error::no '<!-- upstream-base: vX.Y.Z -->' line in docs/stagehand/MAINTAINING.md" >&2
+            exit 1
+          fi
+
+          echo "upstream latest: $latest; fork base: $base"
+          newest=$(printf '%s\n%s\n' "${base#v}" "${latest#v}" | sort -V | tail -1)
+          if [ "$newest" = "${base#v}" ]; then
+            echo "fork is on the newest upstream release"
+            exit 0
+          fi
+
+          title="Upstream webhook-go ${latest} released"
+          open=$(gh issue list --repo "$REPO" --state open --search "\"${title}\" in:title" \
+                   --json title --jq "map(select(.title == \"${title}\")) | length")
+          if [ "$open" != "0" ]; then
+            echo "issue already open: $title"
+            exit 0
+          fi
+
+          body=$(printf '%s\n' \
+            "Upstream voxpupuli/webhook-go released ${latest}; this fork is based on ${base}." \
+            "" \
+            "Release notes: https://github.com/voxpupuli/webhook-go/releases/tag/${latest}" \
+            "" \
+            "Triage within a week (docs/stagehand/MAINTAINING.md, \"Upstream watch\"):" \
+            "- [ ] Read the release notes. A security fix means rebase and release now." \
+            "- [ ] Rebase stagehand onto ${latest} (\"Rebase onto a new upstream tag\")." \
+            "- [ ] Cut ${latest}-stagehand.1 and verify it (\"Cut a release\")." \
+            "- [ ] Update the pinned URL and sha256 in stagehand-module docs/stagehand-webhook.md.")
+          gh issue create --repo "$REPO" --title "$title" --body "$body"
