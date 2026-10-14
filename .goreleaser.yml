@@ -1,44 +1,47 @@
 version: 2
+# Stagehand fork (puppet-stagehand/webhook-go, branch stagehand).
+#
+# What differs from upstream's file, and why (docs/stagehand/MAINTAINING.md):
+# - builds: linux amd64 and arm64 only. Those are the platforms stagehand::webhook
+#   installs on; upstream's windows, freebsd and arm v6/v7 targets are dropped to keep
+#   the signed set small (the mTLS deploy API needs flock and process groups, so it
+#   only works on Unix anyway).
+# - nfpms: vendor, maintainer and description name the fork. The package name
+#   (webhook-go), the config path (/etc/voxpupuli/webhook.yml) and the unit name
+#   (webhook-go.service) stay upstream's, because the module and upstream's docs use them.
+# - signs and sboms: the project's supply-chain style (as in stagehand-installer):
+#   keyless cosign over the checksums file, a syft SBOM per archive and package.
+# - dockers and release: retargeted from voxpupuli to puppet-stagehand.
+# The Go module path stays github.com/voxpupuli/webhook-go so upstream rebases stay clean.
 before:
     hooks:
         - go mod download
 archives:
     - id: webhook-go
-      format_overrides:
-          - goos: windows
-            formats: ["zip"]
+      formats: ["tar.gz"]
 builds:
     - id: webhook-go
       ldflags: -s -w -X 'github.com/voxpupuli/webhook-go/cmd.version={{.Version}}'
+      flags:
+          - -trimpath
       env:
           - CGO_ENABLED=0
       goos:
           - linux
-          - windows
-          - freebsd
       goarch:
           - amd64
-          - arm
           - arm64
-      goarm:
-          - "6"
-          - "7"
-      ignore:
-          - goos: windows
-            goarch: arm
-          - goos: windows
-            goarch: arm64
-          - goos: freebsd
-            goarch: arm
 nfpms:
-    - vendor: Vox Pupuli
-      homepage: https://github.com/voxpupuli/webhook-go
-      maintainer: Vox Pupuli <voxpupuli@groups.io>
+    - id: webhook-go
+      package_name: webhook-go
+      vendor: Puppet Stagehand (fork of Vox Pupuli webhook-go)
+      homepage: https://github.com/puppet-stagehand/webhook-go
+      maintainer: Puppet Stagehand <https://github.com/puppet-stagehand/webhook-go/issues>
       description: |-
-          Puppet Webhook API server written in Go.
-          Designed to provide a web api that can receive
-          webhooks from VCS services such as GitHub, GitLab, etc
-          and execute r10k deployments
+          Stagehand fork of the Vox Pupuli webhook-go Puppet deployment API server.
+          Adds an mTLS-only deploy API (Puppet CA client certificates, certname
+          allow-list, CRL and fingerprint pin) whose results are judged by the
+          r10k or g10k deploy marker and the expected commit SHA.
       license: Apache 2.0
       formats:
           - deb
@@ -52,23 +55,63 @@ nfpms:
       scripts:
           postinstall: "build/post-install.sh"
           postremove: "build/post-remove.sh"
+checksum:
+    name_template: "checksums.txt"
+    algorithm: sha256
+signs:
+    # Keyless cosign (no key: field). Under GitHub Actions with id-token: write,
+    # cosign gets a short-lived Sigstore certificate for this repository's release
+    # workflow. Only checksums.txt is signed: it lists the sha256 of every archive
+    # and package, so one signature covers them all. The bundle
+    # (checksums.txt.sigstore.json) carries the signature and the certificate.
+    - cmd: cosign
+      signature: "${artifact}.sigstore.json"
+      args: ["sign-blob", "--bundle=${signature}", "--yes", "${artifact}"]
+      artifacts: checksum
+sboms:
+    # syft (installed by the release workflow) writes one SPDX SBOM per artifact.
+    - id: archive-sbom
+      artifacts: archive
+    - id: package-sbom
+      artifacts: package
 dockers:
     - image_templates:
-          - "ghcr.io/voxpupuli/{{ .ProjectName }}:{{ .Version }}"
+          - "ghcr.io/puppet-stagehand/{{ .ProjectName }}:{{ .Version }}"
       dockerfile: Dockerfile
       use: buildx
       build_flag_templates:
           - --platform=linux/amd64
+          - --label=org.opencontainers.image.source=https://github.com/puppet-stagehand/webhook-go
       extra_files:
           - "build/webhook.yml"
+docker_signs:
+    # Keyless cosign signature on the pushed image digest (same identity as signs:).
+    - cmd: cosign
+      artifacts: images
+      args: ["sign", "${artifact}@${digest}", "--yes"]
 release:
     github:
-        owner: voxpupuli
+        owner: puppet-stagehand
         name: webhook-go
     name_template: "Release v{{.Version}}"
-    prerelease: auto
-checksum:
-    name_template: "checksums.txt"
+    # vX.Y.Z-stagehand.N tags are real releases of the fork, not previews.
+    prerelease: "false"
+    header: |
+        Stagehand fork of voxpupuli/webhook-go, based on upstream v2.15.1.
+        Read docs/stagehand/USER-GUIDE.md for what it adds.
+
+        **The mTLS deploy API (/api/v1/deploys) needs Linux.** It uses flock and
+        process groups; only linux amd64 and arm64 builds are published.
+
+        Verify before you pin (needs cosign 2.x or later):
+
+        ```sh
+        cosign verify-blob --bundle checksums.txt.sigstore.json \
+          --certificate-identity "https://github.com/puppet-stagehand/webhook-go/.github/workflows/release.yml@refs/tags/{{ .Tag }}" \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          checksums.txt
+        sha256sum -c --ignore-missing checksums.txt
+        ```
 snapshot:
     version_template: "{{ .Tag }}-next"
 changelog:
